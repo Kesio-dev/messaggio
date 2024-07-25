@@ -22,7 +22,7 @@ type Message struct {
 func main() {
 	db, err := sqlx.Connect("pgx", "postgresql://user:password@db:5432/messages_db?sslmode=disable")
 	if err != nil {
-		panic(err)
+		log.Fatalf("Ошибка подключения к БД: %v", err)
 	}
 
 	addr := "kafka:9092"
@@ -35,38 +35,48 @@ func main() {
 	})
 	defer kafkaReader.Close()
 
+	log.Println("Начало обработки сообщений...")
+
 	for {
 		message, err := kafkaReader.FetchMessage(context.Background())
 		if err != nil {
-			log.Printf("Failed to fetch message: %v", err)
+			log.Printf("Не удалось получить сообщение: %v", err)
 			continue
 		}
 
+		log.Printf("Получено сообщение: %s с ключом: %s", string(message.Value), string(message.Key))
+
 		var msg Message
-		err = db.Get(&msg, "SELECT * FROM messages WHERE message = $1", string(message.Value))
+		err = db.Get(&msg, "SELECT * FROM messages WHERE id = $1", string(message.Key))
 		if err != nil {
-			log.Printf("Failed to fetch message from DB: %v", err)
+			log.Printf("Не удалось получить сообщение из БД: %v", err)
 			continue
 		}
+
+		log.Printf("Сообщение из БД: %v", msg)
 
 		time.Sleep(2 * time.Second)
 
 		if rand.Float32() < 0.5 {
 			msg.Status = "success"
+			log.Println("Статус сообщения обновлен на 'success'")
 		} else {
 			msg.Status = "failed"
+			log.Println("Статус сообщения обновлен на 'failed'")
 		}
 		msg.UpdatedAt = time.Now()
 
 		_, err = db.NamedExec(`UPDATE messages SET status = :status, updated_at = :updated_at WHERE id = :id`, msg)
 		if err != nil {
-			log.Printf("Failed to update message status: %v", err)
+			log.Printf("Не удалось обновить статус сообщения: %v", err)
 			continue
 		}
 
 		err = kafkaReader.CommitMessages(context.Background(), message)
 		if err != nil {
-			log.Printf("Failed to commit message: %v", err)
+			log.Printf("Не удалось зафиксировать сообщение: %v", err)
+		} else {
+			log.Printf("Сообщение зафиксировано: %s", string(message.Value))
 		}
 	}
 }
